@@ -1,32 +1,46 @@
 from aiogram import F, Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.filters import ChatMemberUpdatedFilter, IS_NOT_MEMBER, MEMBER
-from bot import dp
+from bot import dp, bot
 from database.supabase_db import Database
 from utils.detector import BotDetector
 from keyboards.inline import get_moderation_keyboard
 from config import CHANNEL_ID, BAN_LIST_CHAT_ID
 import logging
 
+logger = logging.getLogger(__name__)
 detector = BotDetector()
+
+# Определяем тип идентификатора канала
+try:
+    CHANNEL_ID_INT = int(CHANNEL_ID)  # если это число
+except ValueError:
+    CHANNEL_ID_INT = None
+    CHANNEL_USERNAME = CHANNEL_ID.lstrip('@') if CHANNEL_ID.startswith('@') else CHANNEL_ID
 
 @dp.chat_member(ChatMemberUpdatedFilter(member_status_changed=IS_NOT_MEMBER >> MEMBER))
 async def on_user_join(event, bot: Bot):
-    """Отслеживание новых участников (опционально)"""
-    # Здесь можно добавить логику для новых участников
     pass
 
-@dp.message(F.chat.id == CHANNEL_ID)
-async def channel_message_handler(message: Message, bot: Bot):
-    """
-    Обработчик всех сообщений в канале
-    """
+# Фильтр сообщений из канала
+if CHANNEL_ID_INT is not None:
+    @dp.message(F.chat.id == CHANNEL_ID_INT)
+    async def channel_message_handler(message: Message):
+        await handle_channel_message(message)
+else:
+    @dp.message(F.chat.username == CHANNEL_USERNAME)
+    async def channel_message_handler(message: Message):
+        await handle_channel_message(message)
+
+async def handle_channel_message(message: Message):
     try:
-        # Проверяем, не является ли автор доверенным
+        logger.info(f"Received message in channel from user {message.from_user.id}: {message.text or message.caption or '[no text]'}")
+        
+        # Проверка на доверенное лицо
         if await Database.is_trusted(message.from_user.id):
+            logger.info(f"User {message.from_user.id} is trusted, skipping")
             return
         
-        # Проверяем сообщение на подозрительность
         user_info = {
             "id": message.from_user.id,
             "username": message.from_user.username,
@@ -34,12 +48,19 @@ async def channel_message_handler(message: Message, bot: Bot):
             "last_name": message.from_user.last_name
         }
         
-        if await detector.is_suspicious(message.text or message.caption or "", user_info):
-            # Отправляем в Ban-list чат на модерацию
-            await send_to_moderation(message, bot)
+        text_to_check = message.text or message.caption or ""
+        is_susp = await detector.is_suspicious(text_to_check, user_info)
+        logger.info(f"Suspicious check result: {is_susp} for message: {text_to_check[:50]}")
+        
+        if is_susp:
+            logger.info(f"Suspicious message detected, sending to moderation chat")
+            await send_to_moderation(message)
+        else:
+            logger.debug("Message not suspicious")
             
     except Exception as e:
-        logging.error(f"Error in channel_message_handler: {e}")
+        logger.error(f"Error in handle_channel_message: {e}", exc_info=True)
+
 
 async def send_to_moderation(message: Message, bot: Bot):
     """
@@ -64,7 +85,7 @@ async def send_to_moderation(message: Message, bot: Bot):
         text=text,
         reply_markup=get_moderation_keyboard(message.message_id, user.id)
     )
-    
+    logger.info(f"Sending message {message.message_id} from user {message.from_user.id} to ban-list")
     # Сохраняем в базу
     await Database.add_to_ban_list(
         chat_id=message.chat.id,
