@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from contextlib import asynccontextmanager
 import uvicorn
 import asyncio
@@ -11,7 +11,10 @@ from config import RENDER_EXTERNAL_URL
 import handlers  # импортируем все хендлеры
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Флаг для отслеживания состояния polling
 polling_task = None
@@ -24,7 +27,8 @@ async def lifespan(app: FastAPI):
     polling_task = asyncio.create_task(dp.start_polling(bot))
     
     # Запускаем периодический пинг
-    asyncio.create_task(periodic_ping())
+    if RENDER_EXTERNAL_URL:
+        asyncio.create_task(periodic_ping())
     
     yield
     
@@ -36,20 +40,39 @@ async def lifespan(app: FastAPI):
             await polling_task
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            logging.error(f"Error stopping polling: {e}")
 
 # Создаем FastAPI приложение
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title="MonsterGifts Bot",
+    description="Bot for monitoring channel messages",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 @app.get("/")
 async def root():
-    return {"status": "alive", "message": "MonsterGifts Bot is running"}
+    return {
+        "status": "alive", 
+        "message": "MonsterGifts Bot is running",
+        "python_version": "3.11"
+    }
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
 
 @app.post("/webhook")
 async def webhook(request: Request):
     """Webhook endpoint (на случай если переключимся с polling)"""
-    update = await request.json()
-    await dp.feed_update(bot, Update(**update))
-    return {"ok": True}
+    try:
+        update = await request.json()
+        await dp.feed_update(bot, Update(**update))
+        return {"ok": True}
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return {"ok": False, "error": str(e)}
 
 async def periodic_ping():
     """Пинг каждые 10 минут, чтобы Render не засыпал"""
@@ -61,13 +84,22 @@ async def periodic_ping():
         await asyncio.sleep(600)  # 10 минут
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(RENDER_EXTERNAL_URL) as resp:
+                # Пингуем корневой endpoint
+                async with session.get(f"{RENDER_EXTERNAL_URL}/health") as resp:
                     if resp.status == 200:
-                        logging.info("Ping successful")
+                        logging.info(f"Ping successful at {RENDER_EXTERNAL_URL}")
                     else:
                         logging.warning(f"Ping failed with status {resp.status}")
+        except asyncio.CancelledError:
+            break
         except Exception as e:
             logging.error(f"Ping error: {e}")
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(
+        "main:app", 
+        host="0.0.0.0", 
+        port=8000, 
+        reload=False,
+        log_level="info"
+    )
