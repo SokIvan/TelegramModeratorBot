@@ -19,13 +19,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Флаг для отслеживания состояния polling
-polling_task = None
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    global polling_task
     logger.info("=" * 50)
     logger.info("🚀 Бот запускается...")
     logger.info("📋 Проверка подключения к Supabase...")
@@ -38,30 +34,42 @@ async def lifespan(app: FastAPI):
     
     bot_info = await bot.get_me()
     logger.info(f"🤖 Бот: @{bot_info.username}")
-    logger.info("⏩ Запускаем polling...")
     
-    polling_task = asyncio.create_task(dp.start_polling(bot, skip_updates=True))
-    logger.info("✅ Бот готов к работе!")
+    # Устанавливаем вебхук
+    if RENDER_EXTERNAL_URL:
+        webhook_url = f"{RENDER_EXTERNAL_URL}/webhook"
+        try:
+            await bot.set_webhook(
+                webhook_url,
+                allowed_updates=dp.resolve_used_update_types(),
+                drop_pending_updates=True
+            )
+            logger.info(f"✅ Вебхук установлен на {webhook_url}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка установки вебхука: {e}")
+    else:
+        logger.warning("⚠️ RENDER_EXTERNAL_URL не указан, вебхук не установлен")
     
     # Запускаем периодический пинг
     if RENDER_EXTERNAL_URL:
         asyncio.create_task(periodic_ping())
         logger.info(f"🔄 Самопинг запущен для {RENDER_EXTERNAL_URL}")
     
+    logger.info("✅ Бот готов к работе!")
     logger.info("=" * 50)
     
     yield
     
     # Shutdown
     logger.info("🛑 Бот останавливается...")
-    if polling_task:
-        polling_task.cancel()
-        try:
-            await polling_task
-        except asyncio.CancelledError:
-            pass
-        except Exception as e:
-            logger.error(f"Error stopping polling: {e}")
+    
+    # Удаляем вебхук
+    try:
+        await bot.delete_webhook()
+        logger.info("✅ Вебхук удалён")
+    except Exception as e:
+        logger.error(f"❌ Ошибка удаления вебхука: {e}")
+    
     await bot.session.close()
     logger.info("✅ Бот остановлен")
 
@@ -87,13 +95,17 @@ async def health():
 
 @app.post("/webhook")
 async def webhook(request: Request):
-    """Webhook endpoint (на случай если переключимся с polling)"""
+    """Webhook endpoint для приема обновлений от Telegram"""
     try:
-        update = await request.json()
-        await dp.feed_update(bot, Update(**update))
+        update_data = await request.json()
+        update = Update(**update_data)
+        
+        # Передаем обновление диспетчеру
+        await dp.feed_update(bot, update)
+        
         return {"ok": True}
     except Exception as e:
-        logging.error(f"Webhook error: {e}")
+        logger.error(f"❌ Webhook error: {e}", exc_info=True)
         return {"ok": False, "error": str(e)}
 
 async def periodic_ping():
@@ -108,15 +120,17 @@ async def periodic_ping():
             async with aiohttp.ClientSession() as session:
                 async with session.get(f"{RENDER_EXTERNAL_URL}/health") as resp:
                     if resp.status == 200:
-                        logger.info(f"Ping successful at {RENDER_EXTERNAL_URL}")
+                        logger.info(f"✅ Пинг успешен: {RENDER_EXTERNAL_URL}")
                     else:
-                        logger.warning(f"Ping failed with status {resp.status}")
+                        logger.warning(f"⚠️ Пинг вернул статус {resp.status}")
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logger.error(f"Ping error: {e}")
+            logger.error(f"❌ Ошибка пинга: {e}")
 
 if __name__ == "__main__":
+    # Для локального тестирования можно использовать polling
+    # Но на Render используем uvicorn через команду в Dockerfile/start command
     uvicorn.run(
         "main:app", 
         host="0.0.0.0", 

@@ -8,4 +8,4 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 BAN_LIST_CHAT_ID = int(os.getenv("BAN_LIST_CHAT_ID")) if os.getenv("BAN_LIST_CHAT_ID") and os.getenv("BAN_LIST_CHAT_ID").lstrip('-').isdigit() else os.getenv("BAN_LIST_CHAT_ID")
-RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")
+RENDER_EXTERNAL_URL = os.getenv("RENDER_EXTERNAL_URL")  # Обязательно для вебхуков!
