@@ -8,13 +8,16 @@ import aiohttp
 
 from bot import bot, dp
 from config import RENDER_EXTERNAL_URL
-import handlers  # импортируем все хендлеры
+import handlers.channel
+import handlers.commands
+from database.supabase_db import Database
 
 # Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger(__name__)
 
 # Флаг для отслеживания состояния polling
 polling_task = None
@@ -23,17 +26,34 @@ polling_task = None
 async def lifespan(app: FastAPI):
     # Startup
     global polling_task
-    logging.info("Starting bot polling...")
-    polling_task = asyncio.create_task(dp.start_polling(bot))
+    logger.info("=" * 50)
+    logger.info("🚀 Бот запускается...")
+    logger.info("📋 Проверка подключения к Supabase...")
+    
+    try:
+        test_user = await Database.is_trusted(0)
+        logger.info("✅ Подключение к Supabase успешно!")
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к Supabase: {e}")
+    
+    bot_info = await bot.get_me()
+    logger.info(f"🤖 Бот: @{bot_info.username}")
+    logger.info("⏩ Запускаем polling...")
+    
+    polling_task = asyncio.create_task(dp.start_polling(bot, skip_updates=True))
+    logger.info("✅ Бот готов к работе!")
     
     # Запускаем периодический пинг
     if RENDER_EXTERNAL_URL:
         asyncio.create_task(periodic_ping())
+        logger.info(f"🔄 Самопинг запущен для {RENDER_EXTERNAL_URL}")
+    
+    logger.info("=" * 50)
     
     yield
     
     # Shutdown
-    logging.info("Stopping bot polling...")
+    logger.info("🛑 Бот останавливается...")
     if polling_task:
         polling_task.cancel()
         try:
@@ -41,7 +61,9 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logging.error(f"Error stopping polling: {e}")
+            logger.error(f"Error stopping polling: {e}")
+    await bot.session.close()
+    logger.info("✅ Бот остановлен")
 
 # Создаем FastAPI приложение
 app = FastAPI(
@@ -77,23 +99,22 @@ async def webhook(request: Request):
 async def periodic_ping():
     """Пинг каждые 10 минут, чтобы Render не засыпал"""
     if not RENDER_EXTERNAL_URL:
-        logging.warning("RENDER_EXTERNAL_URL not set, skipping ping")
+        logger.warning("RENDER_EXTERNAL_URL not set, skipping ping")
         return
         
     while True:
         await asyncio.sleep(600)  # 10 минут
         try:
             async with aiohttp.ClientSession() as session:
-                # Пингуем корневой endpoint
                 async with session.get(f"{RENDER_EXTERNAL_URL}/health") as resp:
                     if resp.status == 200:
-                        logging.info(f"Ping successful at {RENDER_EXTERNAL_URL}")
+                        logger.info(f"Ping successful at {RENDER_EXTERNAL_URL}")
                     else:
-                        logging.warning(f"Ping failed with status {resp.status}")
+                        logger.warning(f"Ping failed with status {resp.status}")
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logging.error(f"Ping error: {e}")
+            logger.error(f"Ping error: {e}")
 
 if __name__ == "__main__":
     uvicorn.run(

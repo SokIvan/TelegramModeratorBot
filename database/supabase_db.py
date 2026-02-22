@@ -3,6 +3,7 @@ from config import SUPABASE_URL, SUPABASE_KEY
 import logging
 
 # Создаем клиент Supabase
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 class Database:
