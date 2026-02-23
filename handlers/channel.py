@@ -19,10 +19,10 @@ OWNER_ID = 2068329433
 
 
 
-@dp.message()
+@dp.message(~F.text.startswith("/"))
 async def channel_message_handler(message: Message):
     """Обработка всех сообщений, которые видит бот"""
-
+    logger.info("all_messages handle")
     if message.sender_chat:
         return
     
@@ -76,39 +76,44 @@ async def handle_user_message(message: Message):
 
 
 async def send_to_moderation(message: Message):
-    """Отправка в бан-лист группу"""
+    """Отправка сообщения в бан-лист группу (с пересылкой)"""
     from bot import bot
     
     user = message.from_user
-    message_text = message.text or message.caption or "[Медиафайл]"
-    
-
-    
-    # Ссылка на сообщение
-    if message.chat.username:
-        message_link = f"https://t.me/{message.chat.username}/{message.message_id}"
-    else:
-        message_link = f"Сообщение ID: {message.message_id}"
-    
-    text = (
-        f"👾 <b>ПОДОЗРИТЕЛЬНЫЙ ПОЛЬЗОВАТЕЛЬ</b>\n\n"
-        f"👤 <b>Имя:</b> {user.full_name}\n"
-        f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
-        f"📝 <b>Username:</b> @{user.username if user.username else 'нет'}\n"
-        f"🔗 <b>Ссылка:</b> {message_link}\n"
-        f"💬 <b>Сообщение:</b>\n{message_text}\n\n"
-        f"👀 <b>Что делать?</b>"
-    )
+    logger.info(f"📤 Пересылка сообщения в бан-лист чат {BAN_LIST_CHAT_ID}")
     
     try:
-        sent = await bot.send_message(
+        # ШАГ 1: Пересылаем оригинальное сообщение в ban-list
+        forwarded = await message.forward(chat_id=BAN_LIST_CHAT_ID)
+        logger.info(f"✅ Сообщение переслано, ID: {forwarded.message_id}")
+        
+        # ШАГ 2: Отправляем информационное сообщение с кнопками
+        # Ссылка на оригинальное сообщение в канале
+        if message.chat.username:
+            original_link = f"https://t.me/{message.chat.username}/{message.message_id}"
+        else:
+            original_link = f"Сообщение ID: {message.message_id}"
+        
+        info_text = (
+            f"👾 <b>ПОДОЗРИТЕЛЬНЫЙ ПОЛЬЗОВАТЕЛЬ</b>\n\n"
+            f"👤 <b>Имя:</b> {user.full_name}\n"
+            f"🆔 <b>ID:</b> <code>{user.id}</code>\n"
+            f"📝 <b>Username:</b> @{user.username if user.username else 'нет'}\n"
+            f"🔗 <b>Ссылка на оригинал:</b> {original_link}\n\n"
+            f"👆 <b>Выше переслано оригинальное сообщение</b>\n"
+            f"👀 <b>Что делать?</b>"
+        )
+        
+        # Отправляем информационное сообщение с кнопками
+        info_message = await bot.send_message(
             chat_id=BAN_LIST_CHAT_ID,
-            text=text,
+            text=info_text,
             reply_markup=get_moderation_keyboard(message.message_id, user.id)
         )
-
+        logger.info(f"✅ Информация отправлена, ID: {info_message.message_id}")
         
-        # Сохраняем в БД
+        # ШАГ 3: Сохраняем в БД
+        message_text = message.text or message.caption or "[Медиафайл]"
         await Database.add_to_ban_list(
             chat_id=message.chat.id,
             message_id=message.message_id,
@@ -117,7 +122,7 @@ async def send_to_moderation(message: Message):
             full_name=user.full_name,
             suspect_message=message_text
         )
-
+        logger.info(f"✅ Данные сохранены в БД")
         
     except Exception as e:
         logger.error(f"❌ Ошибка отправки в бан-лист: {e}")

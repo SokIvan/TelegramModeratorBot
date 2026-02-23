@@ -18,30 +18,34 @@ def is_owner(user_id: int) -> bool:
 @router.message(Command("monster_moderator_start"))
 async def cmd_start(message: Message):
     """Обработчик команды /monster_moderator_start"""
-    user = message.from_user
-    
-    if is_owner(user.id):
-        welcome_text = (
-            f"👋 <b>Привет, хозяин {user.full_name}!</b>\n\n"
-            f"🤖 Я бот-модератор канала.\n\n"
-            f"<b>📊 Текущая конфигурация:</b>\n"
-            f"📢 Канал: <code>{CHANNEL_ID}</code>\n"
+    logger.info("activated_monster_moderator_start")
+    try:
+        user = message.from_user
+        
+        if is_owner(user.id):
+            welcome_text = (
+                f"👋 <b>Привет, хозяин {user.full_name}!</b>\n\n"
+                f"🤖 Я бот-модератор канала.\n\n"
+                f"<b>📊 Текущая конфигурация:</b>\n"
+                f"📢 Канал: <code>{CHANNEL_ID}</code>\n"
 
-            f"<b>📋 Доступные команды (только для вас):</b>\n"
-            f"/monster_moderator_start - это сообщение\n"
-            f"/monster_moderator_test - тест отправки в ban-list\n"
-            f"/monster_moderator_channel_id - проверить ID текущего чата\n"
+                f"<b>📋 Доступные команды (только для вас):</b>\n"
+                f"/monster_moderator_start - это сообщение\n"
+                f"/monster_moderator_test - тест отправки в ban-list\n"
+                f"/monster_moderator_channel_id - проверить ID текущего чата\n"
 
-            f"✅ Бот работает в локальном режиме!"
-        )
-    else:
-        welcome_text = (
-            f"👋 <b>Привет, {user.full_name}!</b>\n\n"
-            f"🤖 Я бот-модератор канала.\n"
-            f"Извините, но мои команды доступны только владельцу."
-        )
-    
-    await message.reply(welcome_text)
+                f"✅ Бот работает в локальном режиме!"
+            )
+        else:
+            welcome_text = (
+                f"👋 <b>Привет, {user.full_name}!</b>\n\n"
+                f"🤖 Я бот-модератор канала.\n"
+                f"Извините, но мои команды доступны только владельцу."
+            )
+        
+        await message.reply(welcome_text)
+    except Exception as e:
+        logger.error(e)
 
 
 @router.message(Command("monster_moderator_test"))
@@ -143,6 +147,7 @@ async def cmd_status(message: Message):
 @router.message(Command("mm_start"))
 async def cmd_start_short(message: Message):
     """Короткий алиас для /monster_moderator_start"""
+    logger.info("activated_mm_start")
     await cmd_start(message)
 
 @router.message(Command("mm_test"))
