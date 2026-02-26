@@ -1,14 +1,18 @@
 from aiogram import Router
-from aiogram.types import Message
+from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
 import logging
+import os
+import tempfile
 from config import CHANNEL_ID, BAN_LIST_CHAT_ID
 from bot import bot
+from utils.detector_instance import detector
+from database.supabase_db import Database
+from utils.training_loader import TrainingDataLoader
 
 router = Router()
 logger = logging.getLogger(__name__)
 
-# ВАШ USER ID
 OWNER_ID = 2068329433
 
 def is_owner(user_id: int) -> bool:
@@ -164,3 +168,159 @@ async def cmd_channel_short(message: Message):
 async def cmd_status_short(message: Message):
     """Короткий алиас для /monster_moderator_status"""
     await cmd_status(message)
+
+# Новая команда для обучения ML
+@router.message(Command("learn_moderate"))
+async def cmd_learn_moderate(message: Message):
+    """Обучение ML модели на размеченных данных - /learn_moderate"""
+    user = message.from_user
+    if not is_owner(user.id):
+        await message.reply("❌ У вас нет прав на использование этой команды.")
+        return
+
+    await message.reply("🔄 Начинаю обучение ML модели...")
+
+    try:
+        # Получаем все непрочитанные размеченные примеры
+        examples = await Database.get_unprocessed_training_examples()
+        
+        if not examples:
+            await message.reply("📭 Нет новых примеров для обучения")
+            return
+
+        texts = [ex['text'] for ex in examples]
+
+        labels = [ex['label'] for ex in examples]
+
+        # Дообучаем модель
+
+        result = await detector.train_ml(texts, labels, incremental=True)
+        
+        # Помечаем примеры как обработанные
+        example_ids = [ex['id'] for ex in examples]
+        
+        if 'error' not in result:
+            # Помечаем примеры как обработанные только при успехе
+            await Database.mark_training_examples_processed(example_ids)
+            await message.reply(f"✅ Модель успешно дообучена!\n...")
+        else:
+            await message.reply(f"❌ Ошибка обучения: {result['error']}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка обучения: {e}")
+        await message.reply(f"❌ Ошибка обучения: {e}")
+
+# Короткий алиас для обучения
+@router.message(Command("mm_learn"))
+async def cmd_learn_short(message: Message):
+    await cmd_learn_moderate(message)
+
+@router.message(Command("load_training_data"))
+async def cmd_load_training_data(message: Message):
+    """Загружает стандартные обучающие данные (100 хороших + 100 плохих)"""
+    if not is_owner(message.from_user.id):
+        await message.reply("❌ Только для владельца")
+        return
+    
+    await message.reply("🔄 Загружаю начальные обучающие данные...")
+    
+    try:
+        # Получаем стандартные данные
+        csv_data = TrainingDataLoader.get_default_training_data()
+        
+        # Загружаем в БД
+        good, bad = await TrainingDataLoader.load_from_csv(csv_data, moderated_by=OWNER_ID)
+        
+        await message.reply(
+            f"✅ Данные загружены!\n"
+            f"📊 Хороших примеров: {good}\n"
+            f"📊 Плохих примеров: {bad}\n\n"
+            f"Теперь выполните /learn_moderate для обучения модели"
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка загрузки данных: {e}")
+        await message.reply(f"❌ Ошибка: {e}")
+
+@router.message(Command("load_training_file"))
+async def cmd_load_training_file(message: Message):
+    """Загружает обучающие данные из прикрепленного CSV файла"""
+    if not is_owner(message.from_user.id):
+        await message.reply("❌ Только для владельца")
+        return
+    
+    if not message.document:
+        await message.reply("📎 Пришлите CSV файл с данными (формат: text,label)")
+        return
+    
+    try:
+        # Скачиваем файл
+        file = await bot.get_file(message.document.file_id)
+        file_path = file.file_path
+        
+        # Создаем временный файл
+        with tempfile.NamedTemporaryFile(mode='w+', suffix='.csv', delete=False) as tmp:
+            await bot.download_file(file_path, tmp.name)
+            
+            # Читаем файл
+            with open(tmp.name, 'r', encoding='utf-8') as f:
+                csv_content = f.read()
+            
+            # Загружаем в БД
+            good, bad = await TrainingDataLoader.load_from_csv(csv_content, moderated_by=OWNER_ID)
+            
+            # Удаляем временный файл
+            os.unlink(tmp.name)
+            
+            await message.reply(
+                f"✅ Данные из файла загружены!\n"
+                f"📊 Хороших примеров: {good}\n"
+                f"📊 Плохих примеров: {bad}\n\n"
+                f"Теперь выполните /learn_moderate для обучения модели"
+            )
+            
+    except Exception as e:
+        logger.error(f"Ошибка загрузки файла: {e}")
+        await message.reply(f"❌ Ошибка: {e}")
+
+@router.message(Command("training_stats"))
+async def cmd_training_stats(message: Message):
+    """Показывает статистику обучающих данных"""
+    if not is_owner(message.from_user.id):
+        await message.reply("❌ Только для владельца")
+        return
+    
+    try:
+        # Получаем статистику из БД
+        examples = await Database.get_unprocessed_training_examples()
+        
+        # Также получаем все обработанные (можно добавить метод)
+        # Пока просто считаем общее количество
+        
+        result = await Database.get_training_stats()  # добавим этот метод ниже
+        
+        await message.reply(
+            f"📊 <b>Статистика обучающих данных</b>\n\n"
+            f"📝 Всего примеров: {result['total']}\n"
+            f"✅ Хороших (0): {result['good']}\n"
+            f"❌ Плохих (1): {result['bad']}\n"
+            f"🔄 Необработанных: {result['unprocessed']}\n\n"
+            f"🤖 Модель обучена: {'✅' if detector.ml_classifier and detector.ml_classifier.is_trained else '❌'}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Ошибка получения статистики: {e}")
+        await message.reply(f"❌ Ошибка: {e}")
+
+# Короткие алиасы
+@router.message(Command("mm_load"))
+async def cmd_load_short(message: Message):
+    await cmd_load_training_data(message)
+
+@router.message(Command("mm_loadfile"))
+async def cmd_loadfile_short(message: Message):
+    await cmd_load_training_file(message)
+
+@router.message(Command("mm_stats"))
+async def cmd_stats_short(message: Message):
+    await cmd_training_stats(message)
